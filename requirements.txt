@@ -17,6 +17,7 @@ cython==0.29.30
 defusedxml==0.7.1
 deprecated==1.2.13
 dill==0.3.4
+dnspython==2.2.1
 dunamai==1.12.0
 ecs-logging==1.1.0
 elastic-apm==6.9.1
@@ -24,6 +25,8 @@ elastic-enterprise-search==7.17.0
 elastic-transport==7.16.0
 elasticsearch[async]==7.17.3
 emoji==1.7.0
+envelope==2.0.0
+filelock==3.7.0
 frozenlist==1.3.0
 funcparserlib==1.0.0
 get-version==3.5.4
@@ -31,6 +34,7 @@ hiredis==2.0.0
 hy==1.0a4
 hyrule==0.1
 idna==3.3
+jsonpickle==2.2.0
 jxlpy==0.9.1
 lxml==4.8.0
 mpmath==1.2.1
@@ -40,6 +44,7 @@ numpy==1.22.3
 orjson==3.6.8
 packaging==21.3
 pillow==9.1.1
+py3-validate-email==1.0.5
 pycares==4.1.2
 pycparser==2.21
 pycryptodome==3.14.1
@@ -47,7 +52,9 @@ pycurl==7.45.1
 pyjwt==2.4.0
 pyparsing==3.0.9
 python-dateutil==2.8.2
+python-gnupg==0.4.8
 python-levenshtein==0.12.2
+python-magic==0.4.25
 redis[hiredis]==4.3.1
 rply==0.7.8
 setuptools==62.3.2

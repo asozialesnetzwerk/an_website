@@ -14,6 +14,7 @@ elastic-apm = {version = "==6.*"}
 elastic-enterprise-search = {version = "==7.*"}
 elasticsearch = {version = "==7.*", extras = ["async"]}
 emoji = {version = "==1.*"}
+envelope = {version = "==2.*"}
 get_version = {version = "==3.*"}
 hyrule = {version = "<2"}
 jxlpy = {version = "<2"}

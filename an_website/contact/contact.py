@@ -18,18 +18,14 @@ from __future__ import annotations
 import asyncio
 import configparser
 import logging
-import smtplib
-import ssl
-import sys
 import time
-from collections.abc import Iterable
-from datetime import datetime, timezone
 from email import utils as email_utils
-from email.message import Message
+from html import escape
 from math import pi
 from typing import Any, cast
 from urllib.parse import quote, urlencode
 
+from envelope import Envelope  # type: ignore[import]
 from tornado.web import Application, HTTPError, MissingArgumentError
 
 from .. import NAME
@@ -101,9 +97,7 @@ def apply_contact_stuff_to_app(
             fallback=25 if contact_address.endswith("@restmail.net") else 587,
         ),
         CONTACT_SMTP_STARTTLS=config.getboolean(
-            "CONTACT",
-            "SMTP_STARTTLS",
-            fallback=None,
+            "CONTACT", "SMTP_STARTTLS", fallback=None
         ),
         CONTACT_SENDER_ADDRESS=sender_address,
         CONTACT_SENDER_USERNAME=config.get(
@@ -112,51 +106,12 @@ def apply_contact_stuff_to_app(
         CONTACT_SENDER_PASSWORD=config.get(
             "CONTACT", "SENDER_PASSWORD", fallback=None
         ),
+        CONTACT_USE_GPG=config.getboolean("CONTACT", "USE_GPG", fallback=False),
     )
 
 
-def send_message(  # pylint: disable=too-many-arguments
-    message: Message,
-    from_address: str,
-    recipients: Iterable[str],
-    server: str = "localhost",
-    sender: None | str = None,
-    username: None | str = None,
-    password: None | str = None,
-    starttls: None | bool = None,
-    port: int = 587,
-    *,
-    date: None | datetime = None,
-) -> dict[str, tuple[int, bytes]]:
-    """Send an email."""
-    recipients = list(recipients)
-    for spam, eggs in enumerate(recipients):
-        if eggs.startswith("@"):
-            recipients[spam] = "contact" + eggs
-
-    message["Date"] = email_utils.format_datetime(
-        date or datetime.now(tz=timezone.utc)
-    )
-
-    if sender:
-        message["Sender"] = sender
-    message["From"] = from_address
-    message["To"] = ", ".join(recipients)
-
-    with smtplib.SMTP(server, port) as smtp:
-        smtp.set_debuglevel(sys.flags.dev_mode * 2)
-        smtp.ehlo_or_helo_if_needed()
-        if starttls is None:
-            starttls = smtp.has_extn("starttls")
-        if starttls:
-            smtp.starttls(context=ssl.create_default_context())
-        if username and password:
-            smtp.login(username, password)
-        return smtp.send_message(message)
-
-
-def add_geoip_info_to_message(
-    message: Message,
+def add_geoip_info_to_envelope(
+    envelope: Envelope,
     geoip_info: dict[str, Any],
     header_prefix: str = "X-GeoIP",
 ) -> None:
@@ -164,9 +119,9 @@ def add_geoip_info_to_message(
     for spam, eggs in geoip_info.items():
         header = f"{header_prefix}-{spam.replace('_', '-')}"
         if isinstance(eggs, dict):
-            add_geoip_info_to_message(message, eggs, header)
+            add_geoip_info_to_envelope(envelope, eggs, header)
         else:
-            message[header] = str(eggs)
+            envelope.header(header, str(eggs))
 
 
 class ContactPage(HTMLRequestHandler):
@@ -227,20 +182,17 @@ class ContactPage(HTMLRequestHandler):
             else address or "anonymous@foo.bar"
         )
 
-        message = Message()
-
-        message["Subject"] = str(
+        subject = str(
             self.get_argument("subjekt", "")
             or f"{name or address or 'Jemand'} "
             f"will etwas über {self.request.host_name} schreiben."
         )
-        message.set_payload(text, "utf-8")
         if honeypot := self.get_argument("message", ""):  # 🍯
             logger.info(
                 "rejected message: %s",
                 {
-                    "Subject": message["Subject"],
-                    "message": message,
+                    "Subject": subject,
+                    "message": text,
                     "from_address": from_address,
                     "geoip": await self.geoip(),
                     "🍯": honeypot,
@@ -252,7 +204,7 @@ class ContactPage(HTMLRequestHandler):
         if self.settings.get("CONTACT_USE_FORM") == 1:
             query = urlencode(
                 {
-                    "subject": message["Subject"],
+                    "subject": subject,
                     "body": f"{text}\n\nVon: {from_address}",
                 },
                 quote_via=quote,
@@ -262,22 +214,51 @@ class ContactPage(HTMLRequestHandler):
             )
             return
 
+        env = Envelope()
+
+        if self.settings.get("CONTACT_USE_GPG"):
+            env.message(
+                "<html>"
+                "<head></head>"
+                "<body>"
+                f"Subject: <b>{escape(subject)}</b><br>"
+                f"From: <b>{escape(from_address)}</b><br>"
+                f"<p style='margin-left: 1rem'>{escape(text)}</p>"
+                "</body>"
+                "</html>",
+                alternative="html",
+            )
+            text = f"Subject: {subject}\nFrom: {from_address}\n\n{text}"
+            env.encryption(key=self.settings.get("CONTACT_RECIPIENTS"))
+            env.subject(
+                subject=subject,
+                encrypted=f"Jemand schreibt etwas über {self.request.host}",
+            )
+            env.from_(self.settings.get("CONTACT_SENDER_ADDRESS") or False)
+        else:
+            env.subject(subject)
+            env.from_(from_address)
+        env.message(text, alternative="plain")
+
         geoip = await self.geoip()
         if geoip:
-            add_geoip_info_to_message(message, geoip)
+            if self.settings.get("CONTACT_USE_GPG"):
+                # don't add it as header; they aren't encrypted
+                env.attach(str(geoip) + "\n", "application/json", "geoip.json")
+            else:
+                add_geoip_info_to_envelope(env, geoip)
 
-        await asyncio.to_thread(
-            send_message,
-            message=message,
-            from_address=from_address,
-            server=self.settings.get("CONTACT_SMTP_SERVER"),  # type: ignore[arg-type]
-            sender=self.settings.get("CONTACT_SENDER_ADDRESS"),
-            recipients=self.settings.get("CONTACT_RECIPIENTS"),  # type: ignore
-            username=self.settings.get("CONTACT_SENDER_USERNAME"),
+        env.date(email_utils.format_datetime(self.now))
+
+        env.smtp(
+            host=self.settings.get("CONTACT_SMTP_SERVER"),
+            user=self.settings.get("CONTACT_SENDER_USERNAME"),
             password=self.settings.get("CONTACT_SENDER_PASSWORD"),
-            starttls=self.settings.get("CONTACT_SMTP_STARTTLS"),
-            port=self.settings.get("CONTACT_SMTP_PORT"),  # type: ignore[arg-type]
-            date=await self.get_time(),
+            port=self.settings.get("CONTACT_SMTP_PORT"),
         )
+        env.header("Sender", self.settings.get("CONTACT_SENDER_ADDRESS"))
+        env.to(self.settings.get("CONTACT_RECIPIENTS"))
+
+        await asyncio.to_thread(env.send)  # send the mail async
 
         await self.render("pages/empty.html", text="Erfolgreich gesendet.")

@@ -17,12 +17,14 @@
 #[CONTACT]
 #smtp_server = localhost
 #smtp_port = 587
-#smtp_starttls = ...  # detected automatically by default (can be disabled through a STRIPTLS attack)
 #sender_address = ...
 #sender_username = ...
 #sender_password = ...
 # -- contact_address is shown to users if the rest isn't given, else it is the receiving address(es)
 #contact_address = asozial@example.org
+# if use_gpg, the email will be encrypted with gpg
+# the public keys of the contact_addresses have to be in gpg
+#use_gpg =  nope
 
 #[TLS]
 #enabled = nope
